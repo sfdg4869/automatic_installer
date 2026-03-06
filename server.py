@@ -66,6 +66,24 @@ def api_parse():
             if '=' in ev:
                 k, v = ev.split('=', 1)
                 extra_vars[k.strip()] = v.strip()
+                
+        # Super Fallback: Some agents drop SSH credentials, pull them directly if missing
+        import re
+        if "SSH_USER" not in extra_vars:
+            m = re.search(r'SSH_USER=([a-zA-Z0-9_.-]+)', natural_prompt, re.IGNORECASE)
+            if m: extra_vars["SSH_USER"] = m.group(1)
+            
+        if "SSH_PASSWORD" not in extra_vars:
+            m = re.search(r'SSH_PASSWORD=([^\s,;]+)', natural_prompt, re.IGNORECASE)
+            if m: extra_vars["SSH_PASSWORD"] = m.group(1)
+            
+        if "SSH_PORT" not in extra_vars and not parsed_dict.get('port'):
+            m = re.search(r'SSH_PORT=(\d+)', natural_prompt, re.IGNORECASE)
+            if m: parsed_dict['port'] = int(m.group(1))
+
+        # Synchronize back just for display if needed
+        parsed_dict['extra_vars_list'] = [f"{k}={v}" for k, v in extra_vars.items()]
+
         parsed_dict['extra_vars'] = extra_vars
         
         return jsonify(parsed_dict)
@@ -137,7 +155,7 @@ def api_install():
             agent_type = route_prompt(tar_path.name, extra_vars)
             print(f"[ROUTER] Installation resolved to agent target: {agent_type}")
             
-            if agent_type == "pjs":
+            if agent_type in ("pjs", "dgm", "dgs"):
                 script_path = None
             else:
                 # 3. Find Script for Daemon/Normal installs
@@ -152,6 +170,18 @@ def api_install():
             if agent_type == "pjs":
                 from installer.executor_pjs import run_pjs_install
                 exit_code = run_pjs_install(
+                    script_path=script_path,
+                    runtime_os=runtime_os,
+                    host=data.get('host') or "",
+                    port=data.get('port') or 0,
+                    install_path=data.get('install_path') or "",
+                    extra_vars=extra_vars,
+                    extracted_dir=extracted_dir,
+                    tar_path=tar_path,
+                )
+            elif agent_type == "dgm":
+                from installer.executor_dgm import run_dgm_install
+                exit_code = run_dgm_install(
                     script_path=script_path,
                     runtime_os=runtime_os,
                     host=data.get('host') or "",

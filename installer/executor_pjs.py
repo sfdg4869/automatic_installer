@@ -11,13 +11,35 @@ def run_pjs_install(script_path: Path | None, runtime_os: str, host: str, port: 
         print("[ERROR] 'paramiko' is missing. Please run: pip install paramiko")
         return -1
         
-    user = extra_vars.get("SSH_USER", "root")
-    password = ""
+    user = None
+    password = None
+
+    # First, try strict keys
     for k, v in extra_vars.items():
-        if "pw" in k.lower() or "password" in k.lower():
-            password = v
-        if "id" == k.lower() or "user" in k.lower() or "ssh_user" == k.lower():
+        k_lower = k.lower()
+        if k_lower in ("ssh_user", "ssh user", "ssh-user"):
             user = v
+        if k_lower in ("ssh_password", "ssh password", "ssh-password"):
+            password = v
+
+    # Fallback to loose keys, but strictly avoiding DB credentials
+    if not user:
+        for k, v in extra_vars.items():
+            k_lower = k.lower()
+            v_lower = str(v).lower()
+            if ("id" in k_lower or "user" in k_lower or "계정" in k_lower or "유저" in k_lower) and "db" not in k_lower and "database" not in k_lower and "ssh" not in k_lower:
+                if v_lower not in ("postgres", "oracle", "tibero", "mysql"):
+                    user = v
+                    break
+    if not password:
+        for k, v in extra_vars.items():
+            k_lower = k.lower()
+            v_lower = str(v).lower()
+            if ("pw" in k_lower or "pass" in k_lower or "비번" in k_lower or "패스워드" in k_lower) and "db" not in k_lower and "database" not in k_lower and "ssh" not in k_lower:
+                if v_lower not in ("postgres", "oracle", "tibero", "mysql"):
+                    password = v
+                    break
+    user = user or "root"
             
     port = int(port) if port else 22
     
@@ -30,15 +52,22 @@ def run_pjs_install(script_path: Path | None, runtime_os: str, host: str, port: 
         print(f"[SSH ERROR] Connection failed: {e}")
         return -1
         
-    print("[SSH] Running Oracle Auto-Discovery for PJS...")
+    print("[SSH] Running Auto-Discovery for missing PJS settings...")
+    
+    def exists_in_vars(*keys):
+        for k in keys:
+            for ek, ev in extra_vars.items():
+                if k.lower() in ek.lower() and ev:
+                    return True
+        return False
     
     # 1. DB_IP Auto Discovery (default to install target host)
-    if not extra_vars.get("DB_IP") and not extra_vars.get("Database Server"):
+    if not exists_in_vars("db_ip", "database ip", "database server"):
         extra_vars["DB_IP"] = host
         print(f"  => Auto-discovered DB_IP (Target Host): {extra_vars['DB_IP']}")
 
-    # 2. DB_NAME (SID) Auto Discovery via ps -ef
-    if not extra_vars.get("DB_NAME") and not extra_vars.get("Database name"):
+    # 2. DB_NAME (SID) Auto Discovery via ps -ef (Oracle)
+    if not exists_in_vars("db_name", "database name", "sid", "database_sid"):
         stdin, stdout, stderr = ssh.exec_command("ps -ef | grep ora_pmon | grep -v grep")
         pmon_lines = stdout.read().decode('utf-8', errors='ignore').strip().split('\n')
         if pmon_lines and pmon_lines[0]:
@@ -47,8 +76,8 @@ def run_pjs_install(script_path: Path | None, runtime_os: str, host: str, port: 
                 extra_vars["DB_NAME"] = match.group(1).replace("ora_pmon_", "")
                 print(f"  => Auto-discovered DB_NAME (SID) via pmon: {extra_vars['DB_NAME']}")
 
-    # 3. DB_PORT (Listener Port) Auto Discovery via netstat
-    if not extra_vars.get("DB_PORT") and not extra_vars.get("Database Port"):
+    # 3. DB_PORT (Listener Port) Auto Discovery via netstat (Oracle)
+    if not exists_in_vars("db_port", "database port"):
         stdin, stdout, stderr = ssh.exec_command("netstat -tlnp 2>/dev/null | grep tnslsnr | head -n 1")
         lsnr_line = stdout.read().decode('utf-8', errors='ignore').strip()
         if lsnr_line:
@@ -134,6 +163,16 @@ def run_pjs_install(script_path: Path | None, runtime_os: str, host: str, port: 
     exit_status = -1
     last_processed_len = 0
     
+    def gv(*keys, default=""):
+        for k in keys:
+            if k in extra_vars and extra_vars[k]:
+                return extra_vars[k]
+        for ek, ev in extra_vars.items():
+            for k in keys:
+                if k.lower() in ek.lower():
+                    return ev
+        return default
+    
     while True:
         try:
             if channel.recv_ready():
@@ -148,9 +187,8 @@ def run_pjs_install(script_path: Path | None, runtime_os: str, host: str, port: 
                         current_view = buffer[last_processed_len:]
                         
                         if "Select Number :" in current_view:
-                            # 1. DB Type Selection Menu
                             if "Repository DB Type" in current_view:
-                                db_type = (extra_vars.get("DB_TYPE") or extra_vars.get("Database Type") or "").lower()
+                                db_type = gv("db_type", "database type", "database_type", default="").lower()
                                 if "oracle" in db_type:
                                     print("\n[AI Macro] Pressing '2' (Oracle) for DB Type...", flush=True)
                                     channel.send("2\n")
@@ -178,23 +216,17 @@ def run_pjs_install(script_path: Path | None, runtime_os: str, host: str, port: 
                                 question = step_match.group(1).strip().lower()
                                 answer = ""
                                 
-                                # Exact PJS mappings
-                                if "datagather ip" in question: answer = extra_vars.get("DG_IP") or extra_vars.get("DataGather IP")
-                                elif "datagather port" in question: answer = extra_vars.get("DG_PORT") or extra_vars.get("DataGather Port")
-                                elif "database server" in question or "database ip" in question or "db ip" in question: answer = extra_vars.get("DB_IP") or extra_vars.get("Database Server")
-                                elif "database port" in question or "db port" in question: answer = extra_vars.get("DB_PORT") or extra_vars.get("Database Port")
-                                elif "database name" in question or "db name" in question: answer = extra_vars.get("DB_NAME") or extra_vars.get("Database name")
-                                elif "database user" in question or "db user" in question: answer = extra_vars.get("DB_USER") or extra_vars.get("Database User")
-                                elif "password" in question or "db password" in question: answer = extra_vars.get("DB_PASSWORD") or extra_vars.get("Database Password") or extra_vars.get("DB_PASS")
-                                elif "service port" in question or "pjs port" in question: answer = extra_vars.get("PJS_PORT") or extra_vars.get("Service port")
+                                # Exact PJS mappings using case-insensitive check
+                                if "datagather ip" in question: answer = gv("dg_ip", "datagather ip", "datagather_ip")
+                                elif "datagather port" in question: answer = gv("dg_port", "datagather port", "datagather_port")
+                                elif "database server" in question or "database ip" in question or "db ip" in question: answer = gv("db_ip", "database server", "database ip", "database_ip")
+                                elif "database port" in question or "db port" in question: answer = gv("db_port", "database port", "database_port")
+                                elif "database name" in question or "db name" in question or "sid" in question: answer = gv("db_name", "database name", "database_name", "sid", "database sid", "database_sid")
+                                elif "database user" in question or "db user" in question: answer = gv("db_user", "database user", "database_user")
+                                elif "password" in question or "db password" in question: answer = gv("db_password", "database password", "database_password", "db_pass", "db password")
+                                elif "service port" in question or "pjs port" in question: answer = gv("pjs_port", "service port", "service_port", "pjs port", "pjs_port")
                                 
-                                # Fallback scanning
-                                if not answer:
-                                    for k, v in extra_vars.items():
-                                        if k.lower() in question or question in k.lower():
-                                            answer = v
-                                            break
-                                
+                                # Remove aggressive fallback scanning which causes incorrect answers
                                 if answer:
                                     print(f"\n[AI Macro] Answering '{question}' with: {answer}", flush=True)
                                     channel.send(f"{answer}\n")

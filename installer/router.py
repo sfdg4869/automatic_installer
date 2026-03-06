@@ -17,10 +17,11 @@ def route_prompt(text: str, extra_vars: dict = None) -> str:
             return "daemon"
 
     # 2. Check Text Clues
+    # PJS should take absolute precedence if explicitly mentioned in the file name or prompt
     if "pjs" in text_lower or "platform.tar" in text_lower or "platformjs" in text_lower:
         return "pjs"
         
-    if "dgm" in text_lower or "dg_m" in text_lower or "master.tar" in text_lower:
+    if "dgm" in text_lower or "dg_m" in text_lower or "master.tar" in text_lower or "dg_" in text_lower or "datagather" in text_lower:
         return "dgm"
         
     if "dgs" in text_lower or "dg_s" in text_lower or "slave.tar" in text_lower:

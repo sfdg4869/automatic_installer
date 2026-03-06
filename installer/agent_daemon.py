@@ -27,6 +27,12 @@ class InstallConfigSchema(BaseModel):
         description="The specific installation script name (e.g., 'install.sh', 'setup.bat').",
         default=None,
     )
+    ssh_user: Optional[str] = Field(
+        description="The SSH user to connect as.", default=None
+    )
+    ssh_password: Optional[str] = Field(
+        description="The SSH password to use for connection.", default=None
+    )
     extra_vars_list: list[str] = Field(
         description="Extra environment variables to pass during installation. Must be a list of strings in the format 'KEY=VALUE'.",
         default_factory=list,
@@ -35,12 +41,12 @@ class InstallConfigSchema(BaseModel):
 
 def build_system_instruction() -> str:
     return (
-        "You are a specialized AI assistant perfectly configured for parsing **MaxGauge Daemon (Agent)** installation commands.\n"
-        "Your mission is to extract the fields required ONLY for a Daemon installation from the user's natural language input. "
+        "You are a specialized AI assistant perfectly configured for parsing **MaxGauge (Daemon/PJS/DGM)** installation commands.\n"
+        "Your mission is to extract ALL required fields from the user's natural language input. "
         "For any missing information, leave the field as null/None, except for os_choice which defaults to 'auto' and extra_vars which defaults to {}.\n"
         "Pay special attention to:\n"
         "- tar_path: translate natural language like '바탕화면의 app.tar' to '~/Desktop/app.tar' or similar appropriate paths.\n"
-        "- extra_vars_list: extract MaxGauge Daemon specific environment variables (e.g., DB_OWNER, MXG_HOME, CONF_NAME, IPC_KEY) into a list of strings formatted exactly as 'KEY=VALUE'."
+        "- extra_vars_list: extract ALL environment variables (e.g., SSH_USER, SSH_PASSWORD, SSH_PORT, DB_TYPE, DB_USER, DB_PASSWORD, DB_NAME, SID, DG_IP, DG_PORT, PJS_PORT, DB_OWNER, MXG_HOME) into a list of strings formatted exactly as 'KEY=VALUE'."
     )
 
 
@@ -71,7 +77,21 @@ def parse_install_prompt(user_prompt: str) -> InstallConfigSchema:
             if not response.text:
                 return InstallConfigSchema()
 
-            return InstallConfigSchema.model_validate_json(response.text)
+            result = InstallConfigSchema.model_validate_json(response.text)
+            
+            # AI often strips SSH_USER/PASSWORD, fallback regex to recover them
+            import re
+            if not result.ssh_user:
+                m = re.search(r'SSH_USER=([a-zA-Z0-9_.-]+)', user_prompt, re.IGNORECASE)
+                if m: result.ssh_user = m.group(1)
+            if not result.ssh_password:
+                m = re.search(r'SSH_PASSWORD=([^\s,;]+)', user_prompt, re.IGNORECASE)
+                if m: result.ssh_password = m.group(1)
+            if not result.port:
+                m = re.search(r'SSH_PORT=(\d+)', user_prompt, re.IGNORECASE)
+                if m: result.port = int(m.group(1))
+                
+            return result
         except Exception as e:
             error_msg = str(e)
             if "503" in error_msg or "429" in error_msg:

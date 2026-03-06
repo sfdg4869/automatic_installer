@@ -47,7 +47,10 @@ def build_system_instruction() -> str:
         "- DB_NAME: Database name (ORACLE=SID, PG=DB Name)\n"
         "- DB_USER: Database User\n"
         "- DB_PASSWORD: Database Password\n"
-        "- PJS_PORT: Service port (PJS port)"
+        "- PJS_PORT: Service port (PJS port)\n"
+        "- SSH_USER: The SSH username for server access\n"
+        "- SSH_PASSWORD: The SSH password for server access\n"
+        "- SSH_PORT: The SSH port for server access"
     )
 
 
@@ -78,7 +81,24 @@ def parse_install_prompt(user_prompt: str) -> InstallConfigSchema:
             if not response.text:
                 return InstallConfigSchema()
 
-            return InstallConfigSchema.model_validate_json(response.text)
+            result = InstallConfigSchema.model_validate_json(response.text)
+            
+            # Additional fallback to force SSH extraction if AI missed it
+            import re
+            missing_ssh_user = True
+            missing_ssh_pass = True
+            for ev in result.extra_vars_list:
+                if ev.upper().startswith("SSH_USER="): missing_ssh_user = False
+                if ev.upper().startswith("SSH_PASSWORD="): missing_ssh_pass = False
+                
+            if missing_ssh_user:
+                m = re.search(r'SSH_USER=([a-zA-Z0-9_.-]+)', user_prompt, re.IGNORECASE)
+                if m: result.extra_vars_list.append(f"SSH_USER={m.group(1)}")
+            if missing_ssh_pass:
+                m = re.search(r'SSH_PASSWORD=([^\s,;]+)', user_prompt, re.IGNORECASE)
+                if m: result.extra_vars_list.append(f"SSH_PASSWORD={m.group(1)}")
+                
+            return result
         except Exception as e:
             error_msg = str(e)
             if "503" in error_msg or "429" in error_msg:
