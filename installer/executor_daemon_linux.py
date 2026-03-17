@@ -1,4 +1,5 @@
 import os
+import time
 from pathlib import Path
 
 def run_linux_install(script_path: Path, runtime_os: str, host: str, port: int, install_path: str, extra_vars: dict[str, str], extracted_dir: Path, tar_path: Path) -> int:
@@ -8,13 +9,27 @@ def run_linux_install(script_path: Path, runtime_os: str, host: str, port: int, 
         print("[ERROR] 'paramiko' is missing. Please run: pip install paramiko")
         return -1
         
-    user = extra_vars.get("SSH_USER", "root")
-    password = ""
+    user = None
+    password = None
+
+    # Priority 1: Strict keys
     for k, v in extra_vars.items():
-        if "pw" in k.lower() or "password" in k.lower():
-            password = v
-        if "id" == k.lower() or "user" in k.lower() or "ssh_user" == k.lower():
-            user = v
+        kl = k.lower()
+        if kl in ("ssh_user", "ssh user", "ssh-user"): user = v
+        if kl in ("ssh_password", "ssh password", "ssh-password"): password = v
+
+    # Priority 2: Loose keys, but avoid DB credentials
+    if not user or not password:
+        for k, v in extra_vars.items():
+            kl = k.lower()
+            vl = str(v).lower()
+            if not user and ("id" in kl or "user" in kl or "계정" in kl or "유저" in kl) and "db" not in kl and "ssh" not in kl:
+                if vl not in ("postgres", "oracle", "tibero", "mysql"): user = v
+            if not password and ("pw" in kl or "pass" in kl or "비번" in kl or "패스워드" in kl) and "db" not in kl and "ssh" not in kl:
+                if vl not in ("postgres", "oracle", "tibero", "mysql"): password = v
+
+    user = user or "root"
+    password = password or ""
             
     port = int(port) if port else 22
     
@@ -229,13 +244,14 @@ def run_linux_install(script_path: Path, runtime_os: str, host: str, port: int, 
 
             top_dir = rel_script.split('/')[0] if '/' in rel_script else ""
             if top_dir:
-                print(f"[SSH] Moving extracted folder to {final_target}...")
-                stdin, stdout, stderr = ssh.exec_command(f"mkdir -p {final_target} && cp -a {remote_base}/{top_dir}/* {final_target}/")
+                print(f"[SSH] Moving extracted folder (including hidden files) to {final_target}...")
+                # Using cp -a {source}/. {target}/ to include hidden files like .mxgrc
+                stdin, stdout, stderr = ssh.exec_command(f"mkdir -p {final_target} && cp -a {remote_base}/{top_dir}/. {final_target}/")
                 stdout.channel.recv_exit_status()
                 part = rel_script[len(top_dir)+1:] 
                 remote_script_path = f"{final_target}/{part}"
             else:
-                stdin, stdout, stderr = ssh.exec_command(f"mkdir -p {final_target} && cp -a {remote_base}/* {final_target}/")
+                stdin, stdout, stderr = ssh.exec_command(f"mkdir -p {final_target} && cp -a {remote_base}/. {final_target}/")
                 stdout.channel.recv_exit_status()
                 remote_script_path = f"{final_target}/{rel_script}"
         else:
@@ -254,14 +270,17 @@ def run_linux_install(script_path: Path, runtime_os: str, host: str, port: int, 
     if target_home_for_mxgrc:
         print(f"[SSH] Updating MXG_HOME and CONF_NAME in .mxgrc BEFORE install...")
         final_target_val = extra_vars.get("MXG_HOME", target_home_for_mxgrc)
+        # Use a more robust sed pattern that handles both 'NAME=' and 'export NAME='
         update_mxgrc_sh = f"""
         for MXG_FILE in "{final_target_val}/.mxgrc" "{target_home_for_mxgrc}/.mxgrc"; do
             if [ -f "$MXG_FILE" ]; then
-                echo "[SSH] Found .mxgrc at $MXG_FILE, updating..."
-                sed 's!^MXG_HOME=.*!MXG_HOME={target_home_for_mxgrc}/{conf_name_for_mxgrc}!' "$MXG_FILE" > "$MXG_FILE.tmp1" && mv "$MXG_FILE.tmp1" "$MXG_FILE"
-                sed 's!^CONF_NAME=.*!CONF_NAME={conf_name_for_mxgrc}!' "$MXG_FILE" > "$MXG_FILE.tmp2" && mv "$MXG_FILE.tmp2" "$MXG_FILE"
-                sed 's!^export MXG_HOME=.*!export MXG_HOME={target_home_for_mxgrc}/{conf_name_for_mxgrc}!' "$MXG_FILE" > "$MXG_FILE.tmp3" && mv "$MXG_FILE.tmp3" "$MXG_FILE"
-                sed 's!^export CONF_NAME=.*!export CONF_NAME={conf_name_for_mxgrc}!' "$MXG_FILE" > "$MXG_FILE.tmp4" && mv "$MXG_FILE.tmp4" "$MXG_FILE"
+                echo "[SSH] Found .mxgrc at $MXG_FILE, updating MXG_HOME and CONF_NAME..."
+                # 1. Handle MXG_HOME
+                sed -i 's|^MXG_HOME=.*|MXG_HOME={target_home_for_mxgrc}/{conf_name_for_mxgrc}|g' "$MXG_FILE"
+                sed -i 's|^export MXG_HOME=.*|export MXG_HOME={target_home_for_mxgrc}/{conf_name_for_mxgrc}|g' "$MXG_FILE"
+                # 2. Handle CONF_NAME
+                sed -i 's|^CONF_NAME=.*|CONF_NAME={conf_name_for_mxgrc}|g' "$MXG_FILE"
+                sed -i 's|^export CONF_NAME=.*|export CONF_NAME={conf_name_for_mxgrc}|g' "$MXG_FILE"
             fi
         done
         """
@@ -283,32 +302,38 @@ def run_linux_install(script_path: Path, runtime_os: str, host: str, port: int, 
     if install_path:
         exports.append(f"export INSTALL_PATH='{install_path}'")
         
-    skip_keys = {"SSH_USER", "SSH_PASSWORD", "SSH_PASS"}
+    # 1. Define internal keys to skip exporting (keep essential ones like ORACLE_HOME)
+    internal_keys = {"SSH_USER", "SSH_PASSWORD", "SSH_PASS", "VERSION", "IPC_KEY"}
+    
     for k, v in extra_vars.items():
-        if k in skip_keys:
+        if k.upper() in internal_keys or k in internal_keys:
             continue
         exports.append(f"export {k}='{v}'")
         
     ex_str = " ; ".join(exports)
     
-    # mx_str = "" # This line is implicitly removed by the new block
+    # 2. Update .mxgrc if paths are provided
     if target_home_for_mxgrc:
         channel.send("set -a\n")
         time.sleep(0.2)
+        # Load existing .mxgrc if it exists
         channel.send(f"test -f {source_mxgrc_path}/.mxgrc && . {source_mxgrc_path}/.mxgrc\n")
-        time.sleep(0.2)
+        time.sleep(0.1)
         channel.send(f"test -f {source_mxgrc_alt}/.mxgrc && . {source_mxgrc_alt}/.mxgrc\n")
         time.sleep(0.2)
+        
+        # Override with our specific variables
+        channel.send(f"export MXG_HOME='{target_home_for_mxgrc}/{conf_name_for_mxgrc}'\n")
+        channel.send(f"export CONF_NAME='{conf_name_for_mxgrc}'\n")
         channel.send("set +a\n")
         time.sleep(0.2)
         
+    # Oracle discovery environment
     if extra_vars.get("ORACLE_HOME"):
         channel.send(f"export PATH=$PATH:{extra_vars['ORACLE_HOME']}/bin\n")
-        time.sleep(0.2)
+        time.sleep(0.1)
     
-    # The import posixpath and script_dir/script_name definitions are already above, no need to duplicate.
-    
-    # Send exports first
+    # Send the main exports
     if ex_str:
         channel.send(f"{ex_str}\n")
         time.sleep(0.2)
@@ -323,12 +348,14 @@ def run_linux_install(script_path: Path, runtime_os: str, host: str, port: int, 
     # For now, I'll assume 'runtime_os' from function arguments can be used as a proxy or
     # that 'remote_os_uname' would be defined elsewhere. If not, this will cause an error.
     # Assuming 'runtime_os' is the intended variable for OS type check.
-    if "hp-ux" in runtime_os.lower(): # Using runtime_os from function args
+    # Send the execution command
+    channel.send("\n")
+    time.sleep(0.5)
+    if "hp-ux" in runtime_os.lower():
         channel.send(f"ksh ./{script_name} ; exit $?\n")
     else:
         channel.send(f"./{script_name} ; exit $?\n")
     
-    import time
     buffer = ""
     exit_status = -1
     

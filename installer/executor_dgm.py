@@ -11,23 +11,35 @@ def run_dgm_install(script_path: Path | None, runtime_os: str, host: str, port: 
         print("[ERROR] 'paramiko' is missing. Please run: pip install paramiko")
         return -1
         
-    user = extra_vars.get("SSH_USER", "root")
-    password = extra_vars.get("SSH_PASSWORD", "")
-    
-    # Fallback to strict matches if explicit ones are not found, making sure to ignore DB variables
+    user = None
+    password = None
+
+    # First, try strict keys
+    for k, v in extra_vars.items():
+        k_lower = k.lower()
+        if k_lower in ("ssh_user", "ssh user", "ssh-user"):
+            user = v
+        if k_lower in ("ssh_password", "ssh password", "ssh-password"):
+            password = v
+
+    # Fallback to loose keys, but strictly avoiding DB credentials
+    if not user:
+        for k, v in extra_vars.items():
+            k_lower = k.lower()
+            v_lower = str(v).lower()
+            if ("id" in k_lower or "user" in k_lower or "계정" in k_lower or "유저" in k_lower) and "db" not in k_lower and "database" not in k_lower and "ssh" not in k_lower:
+                if v_lower not in ("postgres", "oracle", "tibero", "mysql"):
+                    user = v
+                    break
     if not password:
         for k, v in extra_vars.items():
-            kl = k.lower()
-            if kl in ("pw", "password", "pass", "ssh_pass"):
-                password = v
-                break
-    
-    if user == "root":
-        for k, v in extra_vars.items():
-            kl = k.lower()
-            if kl in ("id", "user", "ssh_user", "username"):
-                user = v
-                break
+            k_lower = k.lower()
+            v_lower = str(v).lower()
+            if ("pw" in k_lower or "pass" in k_lower or "비번" in k_lower or "패스워드" in k_lower) and "db" not in k_lower and "database" not in k_lower and "ssh" not in k_lower:
+                if v_lower not in ("postgres", "oracle", "tibero", "mysql"):
+                    password = v
+                    break
+    user = user or "root"
             
     port = int(port) if port else 22
     
