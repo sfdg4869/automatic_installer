@@ -1,7 +1,8 @@
 import os
+import re
 from typing import Optional
 
-from google import genai
+from openai import OpenAI
 from pydantic import BaseModel, Field
 
 
@@ -55,53 +56,50 @@ def build_system_instruction() -> str:
 
 
 def parse_install_prompt(user_prompt: str) -> InstallConfigSchema:
-    api_key = os.environ.get("GEMINI_API_KEY")
+    api_key = os.environ.get("OPENAI_API_KEY")
     if not api_key:
-        raise ValueError("GEMINI_API_KEY environment variable is not set.")
+        raise ValueError("OPENAI_API_KEY environment variable is not set.")
 
-    client = genai.Client()
-    models_to_try = ["gemini-flash-latest", "gemini-3-flash-preview", "gemini-2.5-flash", "gemini-1.5-flash-8b"]
+    client = OpenAI(api_key=api_key)
+    models_to_try = ["gpt-4o-mini", "gpt-4o", "gpt-3.5-turbo"]
     last_error = None
 
     for model_name in models_to_try:
         try:
-            print(f"[AI] Requesting Gemini using model: {model_name}...")
-            response = client.models.generate_content(
+            print(f"[AI] Requesting OpenAI using model: {model_name}...")
+            response = client.beta.chat.completions.parse(
                 model=model_name,
-                contents=user_prompt,
-                config={
-                    "response_mime_type": "application/json",
-                    "response_schema": InstallConfigSchema,
-                    "system_instruction": build_system_instruction(),
-                    "temperature": 0.0,
-                },
+                messages=[
+                    {"role": "system", "content": build_system_instruction()},
+                    {"role": "user", "content": user_prompt},
+                ],
+                response_format=InstallConfigSchema,
+                temperature=0.0,
             )
             print(f"[AI] Successfully received response from {model_name}!")
-            
-            if not response.text:
+
+            result = response.choices[0].message.parsed
+            if result is None:
                 return InstallConfigSchema()
 
-            result = InstallConfigSchema.model_validate_json(response.text)
-            
             # Additional fallback to force SSH extraction if AI missed it
-            import re
             missing_ssh_user = True
             missing_ssh_pass = True
             for ev in result.extra_vars_list:
                 if ev.upper().startswith("SSH_USER="): missing_ssh_user = False
                 if ev.upper().startswith("SSH_PASSWORD="): missing_ssh_pass = False
-                
+
             if missing_ssh_user:
                 m = re.search(r'SSH_USER=([a-zA-Z0-9_.-]+)', user_prompt, re.IGNORECASE)
                 if m: result.extra_vars_list.append(f"SSH_USER={m.group(1)}")
             if missing_ssh_pass:
                 m = re.search(r'SSH_PASSWORD=([^\s,;]+)', user_prompt, re.IGNORECASE)
                 if m: result.extra_vars_list.append(f"SSH_PASSWORD={m.group(1)}")
-                
+
             return result
         except Exception as e:
             error_msg = str(e)
-            if "503" in error_msg or "429" in error_msg:
+            if "503" in error_msg or "429" in error_msg or "404" in error_msg:
                 last_error = e
                 continue
             raise e

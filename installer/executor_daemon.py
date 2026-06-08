@@ -55,9 +55,10 @@ def run_install_script(
     extra_vars: dict[str, str],
     extracted_dir: Path | None = None,
     tar_path: Path | None = None,
+    install_updater: bool = False,
 ) -> int:
     if host and host not in ("localhost", "127.0.0.1", "0.0.0.0"):
-        return _run_remote_install(script_path, runtime_os, host, port, install_path, extra_vars, extracted_dir, tar_path)
+        return _run_remote_install(script_path, runtime_os, host, port, install_path, extra_vars, extracted_dir, tar_path, install_updater)
 
     env = os.environ.copy()
     env.update(
@@ -74,7 +75,7 @@ def run_install_script(
     return completed.returncode
 
 
-def _run_remote_install(script_path: Path, runtime_os: str, host: str, port: int, install_path: str, extra_vars: dict[str, str], extracted_dir: Path | None, tar_path: Path | None) -> int:
+def _run_remote_install(script_path: Path, runtime_os: str, host: str, port: int, install_path: str, extra_vars: dict[str, str], extracted_dir: Path | None, tar_path: Path | None, install_updater: bool = False) -> int:
     try:
         import paramiko
     except ImportError:
@@ -129,7 +130,7 @@ def _run_remote_install(script_path: Path, runtime_os: str, host: str, port: int
 
     if "linux" in remote_os_uname:
         from installer.executor_daemon_linux import run_linux_install
-        return run_linux_install(script_path, remote_os_uname, host, port, install_path, extra_vars, extracted_dir, tar_path)
+        return run_linux_install(script_path, remote_os_uname, host, port, install_path, extra_vars, extracted_dir, tar_path, install_updater)
     else:
         from installer.executor_daemon_unix import run_unix_install
         return run_unix_install(script_path, remote_os_uname, host, port, install_path, extra_vars, extracted_dir, tar_path)

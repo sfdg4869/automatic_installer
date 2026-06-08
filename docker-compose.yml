@@ -1,0 +1,28 @@
+version: "3.8"
+
+services:
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - "5050:5050"
+    environment:
+      - FLASK_ENV=production
+    # 환경변수 파일(.env)이 있다면 도커 컨테이너에도 주입하기 위해 아래 주석을 해제할 수 있습니다.
+    # env_file:
+    #   - .env
+    restart: always
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    ports:
+      - "5173:5173"
+    environment:
+      # 프론트에서 백엔드로의 참조 주소 지정 (브라우저에서 접근하는 주소이므로 localhost 사용)
+      - VITE_API_BASE_URL=http://localhost:5050
+    restart: always
+    depends_on:
+      - backend

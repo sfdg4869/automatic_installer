@@ -13,3 +13,6 @@ venv.bak/
 __pycache__/
 *.py[cod]
 *$py.class
+.patch_history.json
+.patch_history.tmp
+.patch_history.db

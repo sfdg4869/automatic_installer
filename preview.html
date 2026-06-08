@@ -1,0 +1,343 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>MaxGauge Architecture Diagram</title>
+<style>
+  * { box-sizing: border-box; }
+
+  body {
+    margin: 0;
+    padding: 24px;
+    background: #07111f;
+    font-family: "Malgun Gothic", "Apple SD Gothic Neo", Arial, sans-serif;
+    color: #f8fafc;
+  }
+
+  .page {
+    width: 1280px;
+    height: 820px;
+    margin: 0 auto;
+    background:
+      radial-gradient(circle at 20% 20%, rgba(37, 211, 174, .13), transparent 32%),
+      radial-gradient(circle at 75% 18%, rgba(115, 103, 240, .13), transparent 30%),
+      linear-gradient(135deg, #0a1423 0%, #101827 55%, #08111f 100%);
+    border-radius: 24px;
+    position: relative;
+    overflow: hidden;
+    box-shadow: 0 24px 60px rgba(0,0,0,.45);
+    border: 1px solid rgba(148,163,184,.18);
+  }
+
+  .page::before {
+    content: "";
+    position: absolute;
+    inset: 0;
+    background-image:
+      linear-gradient(rgba(148,163,184,.045) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(148,163,184,.045) 1px, transparent 1px);
+    background-size: 32px 32px;
+  }
+
+  h1 {
+    position: absolute;
+    top: 28px;
+    left: 42px;
+    margin: 0;
+    font-size: 28px;
+    letter-spacing: -1px;
+    z-index: 5;
+  }
+
+  .sub {
+    position: absolute;
+    top: 66px;
+    left: 43px;
+    color: #94a3b8;
+    font-size: 14px;
+    z-index: 5;
+  }
+
+  .legend {
+    position: absolute;
+    right: 42px;
+    top: 36px;
+    display: flex;
+    gap: 14px;
+    color: #aebfd3;
+    font-size: 12px;
+    z-index: 5;
+  }
+
+  .legend span {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+  }
+
+  .dot {
+    width: 9px;
+    height: 9px;
+    border-radius: 50%;
+    display: inline-block;
+  }
+
+  .layer {
+    position: absolute;
+    top: 112px;
+    height: 660px;
+    border: 2px dashed rgba(126, 245, 220, .75);
+    border-radius: 18px;
+    background: rgba(15, 23, 42, .72);
+    z-index: 2;
+  }
+
+  .left-layer { left: 46px; width: 360px; }
+  .mid-layer { left: 430px; width: 460px; }
+  .right-layer { left: 914px; width: 320px; }
+
+  .layer-title {
+    position: absolute;
+    top: 15px;
+    width: 100%;
+    text-align: center;
+    color: #14b88d;
+    font-size: 15px;
+    font-weight: 800;
+  }
+
+  .node {
+    position: absolute;
+    min-width: 140px;
+    min-height: 66px;
+    padding: 12px 16px;
+    border-radius: 11px;
+    background: linear-gradient(180deg, #368ee5, #2878c8);
+    box-shadow: 0 14px 28px rgba(0,0,0,.32), inset 0 1px 0 rgba(255,255,255,.25);
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    align-items: center;
+    color: #fff;
+    font-size: 18px;
+    font-weight: 800;
+    text-align: center;
+    line-height: 1.3;
+    z-index: 4;
+  }
+
+  .node small {
+    display: block;
+    margin-top: 2px;
+    font-size: 13px;
+    color: rgba(255,255,255,.84);
+    font-weight: 600;
+  }
+
+  .node.green { background: linear-gradient(180deg, #26b98a, #1d9f75); }
+  .node.purple { background: linear-gradient(180deg, #8b7de8, #7466dc); }
+  .node.white {
+    background: #fff;
+    color: #333;
+    font-size: 17px;
+  }
+
+  .selected {
+    outline: 3px solid #139df2;
+    outline-offset: 5px;
+  }
+
+  .handle {
+    position: absolute;
+    right: 9px;
+    top: 8px;
+    width: 13px;
+    height: 13px;
+    border-radius: 50%;
+    background: #e4f3ff;
+    border: 2px solid rgba(255,255,255,.9);
+  }
+
+  .oracle {
+    position: absolute;
+    left: 125px;
+    top: 178px;
+    width: 150px;
+    height: 86px;
+    border: 2px solid #1e63ac;
+    border-radius: 50% / 18%;
+    background: #93c5fd;
+    color: #0f4c8d;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-weight: 800;
+    font-size: 18px;
+    z-index: 4;
+    box-shadow: 0 14px 28px rgba(0,0,0,.26);
+  }
+
+  .oracle::before {
+    content: "";
+    position: absolute;
+    left: -2px;
+    right: -2px;
+    top: -2px;
+    height: 28px;
+    border: 2px solid #1e63ac;
+    border-bottom: none;
+    border-radius: 50%;
+    background: #b9d8ff;
+  }
+
+  .storage-layer {
+    position: absolute;
+    left: 470px;
+    top: 590px;
+    width: 380px;
+    height: 128px;
+    border: 2px dashed rgba(126, 245, 220, .75);
+    border-radius: 16px;
+    z-index: 3;
+  }
+
+  .storage-title {
+    position: absolute;
+    bottom: -21px;
+    width: 100%;
+    text-align: center;
+    color: #14b88d;
+    font-size: 13px;
+  }
+
+  .repo {
+    left: 575px;
+    top: 615px;
+    width: 170px;
+    height: 72px;
+    min-height: 72px;
+    border-radius: 50% / 22%;
+    background: linear-gradient(180deg, #ddd8c9, #bfb8a8);
+    color: #4a4942;
+    font-size: 18px;
+  }
+
+  .links {
+    position: absolute;
+    inset: 0;
+    z-index: 3;
+    pointer-events: none;
+  }
+
+  .links path {
+    fill: none;
+    stroke-width: 2.5;
+    filter: drop-shadow(0 2px 2px rgba(0,0,0,.35));
+  }
+
+  .green-line { stroke: #42d6ac; marker-end: url(#greenArrow); }
+  .blue-line { stroke: #4ea5ff; marker-end: url(#blueArrow); }
+  .red-line { stroke: #ff5362; marker-end: url(#redArrow); }
+  .purple-line { stroke: #9487ff; marker-end: url(#purpleArrow); }
+  .gray-line { stroke: rgba(230,230,230,.68); marker-end: url(#grayArrow); }
+  .dash { stroke-dasharray: 8 7; }
+
+  /* absolute node positions */
+  .rts { left: 96px; top: 318px; width: 220px; }
+  .obsd { left: 80px; top: 482px; width: 128px; min-height: 58px; }
+  .sndf { left: 130px; top: 570px; width: 150px; min-height: 58px; }
+  .file { left: 270px; top: 482px; width: 120px; min-height: 58px; }
+
+  .pjs { left: 472px; top: 165px; width: 375px; }
+  .dgm { left: 472px; top: 338px; width: 375px; }
+  .dgs1 { left: 472px; top: 500px; width: 375px; }
+
+  .rtm { left: 955px; top: 170px; width: 240px; min-height: 86px; }
+  .pa { left: 955px; top: 338px; width: 240px; min-height: 86px; }
+
+  .note {
+    position: absolute;
+    left: 42px;
+    bottom: 20px;
+    color: #8293aa;
+    font-size: 12px;
+    z-index: 5;
+  }
+</style>
+</head>
+
+<body>
+  <div class="page">
+    <h1>MaxGauge 구성도</h1>
+    <div class="sub">수집 계층 · AP 서버 계층 · Web Client 계층 간 데이터 흐름</div>
+
+    <div class="legend">
+      <span><i class="dot" style="background:#42d6ac"></i>연동/전송</span>
+      <span><i class="dot" style="background:#4ea5ff"></i>설정/자동 생성</span>
+      <span><i class="dot" style="background:#ff5362"></i>상위 구성 참조</span>
+      <span><i class="dot" style="background:#9487ff"></i>Web 조회</span>
+    </div>
+
+    <div class="layer left-layer"><div class="layer-title">Data Collection Layer</div></div>
+    <div class="layer mid-layer"><div class="layer-title">MaxGauge AP Server Layer</div></div>
+    <div class="layer right-layer"><div class="layer-title">Web Client Layer</div></div>
+
+    <svg class="links" viewBox="0 0 1280 820" preserveAspectRatio="none">
+      <defs>
+        <marker id="greenArrow" markerWidth="10" markerHeight="10" refX="9" refY="5" orient="auto"><path d="M0,0 L10,5 L0,10 Z" fill="#42d6ac"/></marker>
+        <marker id="blueArrow" markerWidth="10" markerHeight="10" refX="9" refY="5" orient="auto"><path d="M0,0 L10,5 L0,10 Z" fill="#4ea5ff"/></marker>
+        <marker id="redArrow" markerWidth="10" markerHeight="10" refX="9" refY="5" orient="auto"><path d="M0,0 L10,5 L0,10 Z" fill="#ff5362"/></marker>
+        <marker id="purpleArrow" markerWidth="10" markerHeight="10" refX="9" refY="5" orient="auto"><path d="M0,0 L10,5 L0,10 Z" fill="#9487ff"/></marker>
+        <marker id="grayArrow" markerWidth="10" markerHeight="10" refX="9" refY="5" orient="auto"><path d="M0,0 L10,5 L0,10 Z" fill="rgba(230,230,230,.68)"/></marker>
+      </defs>
+
+      <!-- Oracle / RTS / AP -->
+      <path class="green-line" d="M275 220 C340 215,395 190,472 190" />
+      <path class="green-line" d="M200 264 L200 318" />
+      <path class="green-line" d="M316 352 C370 284,395 205,472 190" />
+      <path class="blue-line" d="M316 352 C365 354,425 360,472 371" />
+
+      <!-- Local collection -->
+      <path class="gray-line" d="M160 384 L160 482" />
+      <path class="gray-line" d="M160 540 L160 570" />
+      <path class="gray-line" d="M318 482 C305 445,294 405,290 384" />
+      <path class="gray-line" d="M250 570 C280 545,300 515,318 482" />
+
+      <!-- Dashed path to DataGather_S1 -->
+      <path class="blue-line dash" d="M280 600 C345 575,400 535,472 532" />
+      <path class="blue-line dash" d="M316 384 C368 440,413 500,472 532" />
+      <path class="blue-line dash" d="M390 512 C422 518,445 525,472 532" />
+
+      <!-- AP internal -->
+      <path class="red-line" d="M660 500 L660 404" />
+      <path class="red-line" d="M660 338 L660 231" />
+      <path class="blue-line" d="M660 566 L660 615" />
+      <path class="purple-line" d="M745 615 C765 470,790 320,820 231" />
+
+      <!-- Web clients -->
+      <path class="green-line" d="M847 198 C885 198,920 204,955 213" />
+      <path class="purple-line" d="M847 216 C890 260,920 315,955 381" />
+    </svg>
+
+    <div class="oracle">Oracle</div>
+
+    <div class="node rts">RTS<small>클릭하여 설정</small><span class="handle"></span></div>
+    <div class="node obsd">OBSD</div>
+    <div class="node sndf">SNDF</div>
+    <div class="node white file">File</div>
+
+    <div class="node pjs selected">PlatformJS<small>클릭하여 설정</small><span class="handle"></span></div>
+    <div class="node dgm">DataGather_M<small>클릭하여 설정</small><span class="handle"></span></div>
+    <div class="node dgs1">DataGather_S1<small>DGM 설치 시 자동 생성</small><span class="handle"></span></div>
+
+    <div class="storage-layer"><div class="storage-title">Data Storage Layer</div></div>
+    <div class="node repo">Repository</div>
+
+    <div class="node green rtm">Real-time<br>Monitor</div>
+    <div class="node purple pa">Performance<br>Analyzer</div>
+
+    <div class="note">※ PPT/문서 삽입 시 브라우저에서 90~100% 배율로 캡처 권장</div>
+  </div>
+</body>
+</html>

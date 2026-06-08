@@ -117,17 +117,17 @@ def run_dgm_install(script_path: Path | None, runtime_os: str, host: str, port: 
     # Extract Slave port (e.g. from 127.0.0.1:7001 -> 7001) or get from extra_vars
     s_port = gv("slave_gather_port", "Slave Port", default=s_list.split(":")[-1] if ":" in s_list else "7001")
     
-    db_type = gv("database_type", "Database Type", "DB_TYPE", default="oracle")
+    db_type = gv("DATABASE_TYPE", "database_type", "Database Type", "DB_TYPE", default="oracle")
     db_ip = gv("database_ip", "DB_IP", "Database IP", "Database Server", default="127.0.0.1")
-    
+
     # Set different defaults if postgres
     db_type_lower = db_type.lower().strip()
     is_pg = "postgres" in db_type_lower or db_type_lower == "pg"
     db_port = gv("database_port", "DB_PORT", "Database Port", default="5432" if is_pg else "1521")
     db_sid = gv("database_sid", "DB_NAME", "Database Name", "Database SID", default="postgres" if is_pg else "MFO")
-    
-    db_user = gv("database_user", "DB_USER", "Database User", default="postgres")
-    db_pw = gv("database_password", "DB_PASSWORD", "Database Password", default="postgres")
+
+    db_user = gv("database_user", "DB_USER", "Database User", default="postgres" if is_pg else "maxgauge")
+    db_pw = gv("database_password", "DB_PASSWORD", "Database Password", default="postgres" if is_pg else "maxgauge")
     tb = gv("tablespace", "Tablespace", default="tablespace_name")
     i_tb = gv("index_tablespace", "Index Tablespace", default="tablespace_name")
 

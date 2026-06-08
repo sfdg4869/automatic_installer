@@ -2,7 +2,7 @@ import os
 import time
 from pathlib import Path
 
-def run_linux_install(script_path: Path, runtime_os: str, host: str, port: int, install_path: str, extra_vars: dict[str, str], extracted_dir: Path, tar_path: Path) -> int:
+def run_linux_install(script_path: Path, runtime_os: str, host: str, port: int, install_path: str, extra_vars: dict[str, str], extracted_dir: Path, tar_path: Path, install_updater: bool = False) -> int:
     try:
         import paramiko
     except ImportError:
@@ -156,6 +156,9 @@ def run_linux_install(script_path: Path, runtime_os: str, host: str, port: int, 
             if match:
                 host_ip = match.group(1).strip()
                 port_num = match.group(2).strip()
+                # hostname(비IP)이면 SSH 연결 대상 IP로 대체
+                if not re.match(r'^\d+\.\d+\.\d+\.\d+$', host_ip):
+                    host_ip = host
                 extra_vars["LISTENER_IP_PORT"] = f"{host_ip}:{port_num}"
                 print(f"  => Auto-discovered LISTENER via lsnrctl: {extra_vars['LISTENER_IP_PORT']}")
                 lsnr_found = True
@@ -228,37 +231,123 @@ def run_linux_install(script_path: Path, runtime_os: str, host: str, port: int, 
         print(f"[SSH ERROR] Remote extraction failed:\n{stderr.read().decode('utf-8', errors='ignore')}")
         return exit_status
         
-    if extracted_dir:
-        rel_script = script_path.relative_to(extracted_dir).as_posix()
-        
-        target_home = extra_vars.get("MXG_HOME")
-        conf_name = extra_vars.get("CONF_NAME", "")
-        
-        if target_home:
-            if conf_name and not target_home.endswith(conf_name):
-                final_target = f"{target_home.rstrip('/')}/{conf_name}"
-            else:
-                final_target = target_home
-            
-            extra_vars["MXG_HOME"] = final_target
+    if script_path is not None:
+        # Standard installer: script exists locally, calculate remote path
+        if extracted_dir:
+            rel_script = script_path.relative_to(extracted_dir).as_posix()
 
-            top_dir = rel_script.split('/')[0] if '/' in rel_script else ""
-            if top_dir:
-                print(f"[SSH] Moving extracted folder (including hidden files) to {final_target}...")
-                # Using cp -a {source}/. {target}/ to include hidden files like .mxgrc
-                stdin, stdout, stderr = ssh.exec_command(f"mkdir -p {final_target} && cp -a {remote_base}/{top_dir}/. {final_target}/")
-                stdout.channel.recv_exit_status()
-                part = rel_script[len(top_dir)+1:] 
-                remote_script_path = f"{final_target}/{part}"
+            target_home = extra_vars.get("MXG_HOME")
+            conf_name = extra_vars.get("CONF_NAME", "")
+
+            if target_home:
+                if conf_name and not target_home.endswith(conf_name):
+                    final_target = f"{target_home.rstrip('/')}/{conf_name}"
+                else:
+                    final_target = target_home
+
+                extra_vars["MXG_HOME"] = final_target
+
+                top_dir = rel_script.split('/')[0] if '/' in rel_script else ""
+                if top_dir:
+                    print(f"[SSH] Moving extracted folder (including hidden files) to {final_target}...")
+                    stdin, stdout, stderr = ssh.exec_command(f"mkdir -p {final_target} && cp -a {remote_base}/{top_dir}/. {final_target}/")
+                    stdout.channel.recv_exit_status()
+                    part = rel_script[len(top_dir)+1:]
+                    remote_script_path = f"{final_target}/{part}"
+                else:
+                    stdin, stdout, stderr = ssh.exec_command(f"mkdir -p {final_target} && cp -a {remote_base}/. {final_target}/")
+                    stdout.channel.recv_exit_status()
+                    remote_script_path = f"{final_target}/{rel_script}"
             else:
-                stdin, stdout, stderr = ssh.exec_command(f"mkdir -p {final_target} && cp -a {remote_base}/. {final_target}/")
-                stdout.channel.recv_exit_status()
-                remote_script_path = f"{final_target}/{rel_script}"
+                remote_script_path = f"{remote_base}/{rel_script}"
         else:
-            remote_script_path = f"{remote_base}/{rel_script}"
+            remote_script_path = f"{remote_base}/{script_path.name}"
     else:
-        remote_script_path = f"{remote_base}/{script_path.name}"
-        
+        # Package-type tar: auto-select matching .pkg.tar.gz on remote server
+        print("[SSH] Package-type tar detected — auto-selecting platform package on remote server...")
+        stdin, stdout, stderr = ssh.exec_command("uname -m")
+        remote_arch = stdout.read().decode('utf-8', errors='ignore').strip() or "x86_64"
+
+        oracle_ver_hint = ""
+        oracle_home = extra_vars.get("ORACLE_HOME", "")
+        if oracle_home:
+            m = re.search(r'/(\d+)\.\d+', oracle_home)
+            if m:
+                oracle_ver_hint = m.group(1)
+
+        select_cmd = f"""
+set -e
+ARCH="{remote_arch}"
+BASE="{remote_base}"
+PKG_LIST=$(find "$BASE" -name "*.linux.$ARCH.*.pkg.tar.gz" 2>/dev/null | sort)
+SELECTED=""
+if [ -n "{oracle_ver_hint}" ]; then
+    SELECTED=$(echo "$PKG_LIST" | grep "\\.{oracle_ver_hint}[0-9]*\\.pkg\\.tar\\.gz" | head -1)
+fi
+[ -z "$SELECTED" ] && SELECTED=$(echo "$PKG_LIST" | head -1)
+if [ -z "$SELECTED" ]; then
+    echo "PKG_ERROR:No matching package found for linux/$ARCH"
+    exit 1
+fi
+echo "PKG_SELECTED:$SELECTED"
+PKG_DIR="$BASE/pkg_extracted"
+mkdir -p "$PKG_DIR"
+cd "$PKG_DIR"
+tar -xzf "$SELECTED" 2>/dev/null || gzip -dc "$SELECTED" | tar -xf -
+INSTALL_SH=$(find "$PKG_DIR" -name "install.sh" | head -1)
+if [ -z "$INSTALL_SH" ]; then
+    echo "PKG_ERROR:No install.sh found in package $SELECTED"
+    exit 1
+fi
+echo "PKG_SCRIPT:$INSTALL_SH"
+"""
+        stdin, stdout, stderr = ssh.exec_command(select_cmd)
+        pkg_out = stdout.read().decode('utf-8', errors='ignore')
+        print(f"[SSH] Package selection output:\n{pkg_out.strip()}")
+
+        if "PKG_ERROR" in pkg_out:
+            err = next((l for l in pkg_out.splitlines() if "PKG_ERROR" in l), "Unknown error")
+            print(f"[SSH ERROR] {err}")
+            return -1
+
+        remote_script_path = None
+        for line in pkg_out.splitlines():
+            if line.startswith("PKG_SCRIPT:"):
+                remote_script_path = line[len("PKG_SCRIPT:"):].strip()
+                break
+
+        if not remote_script_path:
+            print("[SSH ERROR] Could not determine remote install script path from package")
+            return -1
+
+        print(f"[SSH] Selected install script: {remote_script_path}")
+
+        # install.sh 실행 전 패키지 파일을 MXG_HOME으로 복사
+        mxg_home_val = extra_vars.get("MXG_HOME", "")
+        conf_name_val = extra_vars.get("CONF_NAME", "")
+        if mxg_home_val:
+            if conf_name_val and not mxg_home_val.endswith("/" + conf_name_val):
+                final_mxg = f"{mxg_home_val.rstrip('/')}/{conf_name_val}"
+            else:
+                final_mxg = mxg_home_val
+            extra_vars["MXG_HOME"] = final_mxg
+
+            pkg_extracted_dir = f"{remote_base}/pkg_extracted"
+            rel_in_pkg = remote_script_path[len(pkg_extracted_dir):].lstrip("/")
+            pkg_top_dir = rel_in_pkg.split("/")[0]
+            rel_install_script = "/".join(rel_in_pkg.split("/")[1:])
+
+            print(f"[SSH] Copying package contents to MXG_HOME: {final_mxg}...")
+            stdin, stdout, stderr = ssh.exec_command(
+                f"mkdir -p '{final_mxg}' && cp -a '{pkg_extracted_dir}/{pkg_top_dir}/.' '{final_mxg}/'"
+            )
+            if stdout.channel.recv_exit_status() != 0:
+                print(f"[SSH ERROR] Failed to copy package to MXG_HOME: {stderr.read().decode('utf-8', errors='ignore')}")
+                return -1
+
+            remote_script_path = f"{final_mxg}/{rel_install_script}"
+            print(f"[SSH] Install script in MXG_HOME: {remote_script_path}")
+
     print(f"[SSH] Handing over logic. Executing INTERACTIVE remote script: {remote_script_path}")
     
     conf_name_for_mxgrc = extra_vars.get("CONF_NAME", "")
@@ -289,7 +378,30 @@ def run_linux_install(script_path: Path, runtime_os: str, host: str, port: int, 
         
         source_mxgrc_path = final_target_val
         source_mxgrc_alt = target_home_for_mxgrc
-    
+
+    # ── Updater: set MXG_UPDATER_ENABLED=1 in mxgrc before installation ──
+    if install_updater and target_home_for_mxgrc and conf_name_for_mxgrc:
+        mxgrc_path = f"{target_home_for_mxgrc}/{conf_name_for_mxgrc}/mxgrc"
+        print(f"[SSH] [Updater] Enabling MXG_UPDATER_ENABLED=1 in {mxgrc_path}...")
+        update_cmd = f"""
+if [ -f "{mxgrc_path}" ]; then
+    if grep -q 'MXG_UPDATER_ENABLED' "{mxgrc_path}"; then
+        sed -i 's/^export MXG_UPDATER_ENABLED=.*/export MXG_UPDATER_ENABLED=1/g' "{mxgrc_path}"
+        sed -i 's/^MXG_UPDATER_ENABLED=.*/MXG_UPDATER_ENABLED=1/g' "{mxgrc_path}"
+        echo "[Updater] MXG_UPDATER_ENABLED set to 1"
+    else
+        echo "export MXG_UPDATER_ENABLED=1" >> "{mxgrc_path}"
+        echo "[Updater] MXG_UPDATER_ENABLED=1 appended to mxgrc"
+    fi
+else
+    echo "[Updater][WARNING] mxgrc not found at {mxgrc_path} — skipping"
+fi
+"""
+        stdin, stdout, stderr = ssh.exec_command(update_cmd)
+        out = stdout.read().decode('utf-8', errors='ignore').strip()
+        print(f"  => {out}")
+        stdout.channel.recv_exit_status()
+
     channel = ssh.invoke_shell()
     channel.resize_pty(width=200, height=50)
     
@@ -358,7 +470,7 @@ def run_linux_install(script_path: Path, runtime_os: str, host: str, port: int, 
     
     buffer = ""
     exit_status = -1
-    
+
     while True:
         try:
             if channel.recv_ready():
@@ -367,6 +479,10 @@ def run_linux_install(script_path: Path, runtime_os: str, host: str, port: int, 
                 buffer += data
         except Exception as e:
             print(f"\n[SSH] Channel closed or read error: {e}")
+            # 쉘 종료로 소켓이 닫힌 경우 로그로 성공 여부 판단
+            if "End Install.sh" in buffer or "End install.sh" in buffer:
+                print("[SSH] Install script completed — treating as success despite socket close.")
+                exit_status = 0
             break
             
         if channel.recv_ready() or buffer:
@@ -413,7 +529,22 @@ def run_linux_install(script_path: Path, runtime_os: str, host: str, port: int, 
                 channel.send(selected + "\n")
                 buffer = ""
             elif "LISTENER INFO:" in buffer and "]" in buffer and buffer.strip().endswith("]"):
-                ans = extra_vars.get("LISTENER_IP_PORT", extra_vars.get("LISTENER_INFO", extra_vars.get("LISTENER_IP", "")))
+                ans = ""
+                # 프롬프트에서 표시된 옵션 파싱: LISTENER INFO: [ opt1|opt2|... ]
+                opts_match = re.search(r'LISTENER INFO:\s*\[\s*([^\]]+)\s*\]', buffer)
+                if opts_match:
+                    opts = [o.strip() for o in opts_match.group(1).split('|') if o.strip()]
+                    # x.x.x.x:port 형식의 옵션 우선 선택
+                    ip_port_opts = [o for o in opts if re.match(r'^\d+\.\d+\.\d+\.\d+:\d+$', o)]
+                    if ip_port_opts:
+                        matching = [o for o in ip_port_opts if o.startswith(f"{host}:")]
+                        ans = matching[0] if matching else ip_port_opts[0]
+                if not ans:
+                    stored = extra_vars.get("LISTENER_IP_PORT", "")
+                    if stored and re.match(r'^\d+\.\d+\.\d+\.\d+:\d+$', stored):
+                        ans = stored
+                    elif stored and ":" in stored:
+                        ans = f"{host}:{stored.split(':')[-1]}"
                 if not ans:
                     ans = f"{host}:1521"
                 channel.send(ans + "\n")
@@ -499,6 +630,15 @@ def run_linux_install(script_path: Path, runtime_os: str, host: str, port: int, 
                 channel.send("2\n") # 2 is Linux
                 buffer = ""
             elif "run run_by_sys ?" in buffer and buffer.strip().endswith("]"):
+                channel.send("y\n")
+                buffer = ""
+            elif install_updater and (
+                buffer.strip().endswith("(y/n)") or
+                buffer.strip().endswith("[y/n]") or
+                (buffer.strip().endswith("]") and "?" in buffer.split("\n")[-3:])
+            ):
+                # Updater 활성화 시 처리되지 않은 yes/no 프롬프트는 모두 y로 응답
+                print(f"[Updater] Auto-answering unmatched prompt with 'y'")
                 channel.send("y\n")
                 buffer = ""
 

@@ -188,7 +188,7 @@ def run_pjs_install(script_path: Path | None, runtime_os: str, host: str, port: 
                         
                         if "Select Number :" in current_view:
                             if "Repository DB Type" in current_view:
-                                db_type = gv("db_type", "database type", "database_type", default="").lower()
+                                db_type = gv("DATABASE_TYPE", "db_type", "database type", "database_type", default="oracle").lower()
                                 if "oracle" in db_type:
                                     print("\n[AI Macro] Pressing '2' (Oracle) for DB Type...", flush=True)
                                     channel.send("2\n")
